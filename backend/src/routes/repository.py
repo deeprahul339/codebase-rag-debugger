@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from ..ingestion.indexer import index_repository, is_repo_indexed, repo_id_from_url, WORKSPACE_DIR
+from ..ingestion.indexer import get_repo_index_status, index_repository, is_repo_indexed, repo_id_from_url, WORKSPACE_DIR
 import os
 
 router = APIRouter(prefix="/api/repository", tags=["repository"])
@@ -20,30 +20,22 @@ class IndexRepoRequest(BaseModel):
 
 @router.post("/check")
 async def check_repo(body: IndexRepoRequest):
-    print(">>> /check endpoint called")
-    print(">>> repoUrl:", body.repoUrl)
 
     if not body.repoUrl:
         raise HTTPException(status_code=400, detail="repoUrl is required")
 
-    print(">>> Creating repo_id...")
     repo_id = repo_id_from_url(body.repoUrl)
-    print(">>> repo_id:", repo_id)
 
     loop = asyncio.get_running_loop()
-
-    print(">>> Calling is_repo_indexed...")
-    indexed = await loop.run_in_executor(
+    status = await loop.run_in_executor(
         _index_executor,
-        is_repo_indexed,
+        get_repo_index_status,
         repo_id,
     )
 
-    print(">>> is_repo_indexed returned:", indexed)
-
     return {
         "repoId": repo_id,
-        "indexed": indexed,
+        **status
     }
 
 @router.post("/index")
@@ -58,7 +50,7 @@ async def index_repo(body: IndexRepoRequest):
     this the server becomes completely unresponsive while indexing, causing
     the frontend to time out showing "Indexing...".
 
-    If the repo is already indexed in Chroma, index_repository returns
+    If the repo is already indexed in FAISS, index_repository returns
     immediately without re-embedding anything.
     """
     if not body.repoUrl:
@@ -80,7 +72,7 @@ async def index_repo(body: IndexRepoRequest):
 @router.get("/status/{repo_id}")
 def repo_status(repo_id: str):
     """
-    Quick check by repo_id — returns whether a repo is indexed in Chroma.
+    Quick check by repo_id — returns whether a repo is indexed in FAISS.
     """
     local_path = os.path.join(WORKSPACE_DIR, repo_id)
     indexed = is_repo_indexed(repo_id)

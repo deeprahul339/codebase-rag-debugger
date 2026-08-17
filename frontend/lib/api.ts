@@ -1,10 +1,15 @@
 import type { IndexRepoResponse, ChatResponse } from "../types";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:4000";
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:4001";
 
 export async function checkRepoStatus(
-  repoUrl: string
-): Promise<{ repoId: string; indexed: boolean }> {
+  repoUrl: string,
+): Promise<{
+  repoId: string;
+  indexed: boolean;
+  fileCount: number;
+  chunkCount: number;
+}> {
   const res = await fetch(`${API_BASE}/api/repository/check`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -14,7 +19,9 @@ export async function checkRepoStatus(
   return res.json();
 }
 
-export async function indexRepository(repoUrl: string): Promise<IndexRepoResponse> {
+export async function indexRepository(
+  repoUrl: string,
+): Promise<IndexRepoResponse> {
   const res = await fetch(`${API_BASE}/api/repository/index`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -24,7 +31,10 @@ export async function indexRepository(repoUrl: string): Promise<IndexRepoRespons
   return res.json();
 }
 
-export async function askQuestion(repoId: string, question: string): Promise<ChatResponse> {
+export async function askQuestion(
+  repoId: string,
+  question: string,
+): Promise<ChatResponse> {
   const res = await fetch(`${API_BASE}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

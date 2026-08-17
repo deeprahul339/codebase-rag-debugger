@@ -1,129 +1,395 @@
 """
-Clones a repo, chunks it, embeds the chunks, and stores them in a local
-Chroma index. Uses chromadb.PersistentClient, which is fully embedded
-(writes to a local folder as SQLite + files) — no server process, no
-Docker, nothing to run in the background.
-"""
- 
-import os ##folders, environment variables, file paths
-import re ##convert url into safe ID's
-import subprocess ##runs commands on machine i.e. running git clone
-import threading ##lock to serialise all Chroma access
-import time ##pause between batches of api calls
+Clones a repository, chunks its source code, generates embeddings,
+and stores the vectors + metadata in a local FAISS index.
 
-import chromadb  ##local vector store(database)
+FAISS is persisted locally through FAISSVectorStore.
+"""
+
+import os
+import re
+import subprocess #used to execute system commands e.g. git clone command
+import time
 
 from .file_scanner import scan_repository
 from .code_chunker import chunk_repository, CodeChunk
 from ..llm.model import embed_texts
-
-from typing import Any
-
-WORKSPACE_DIR = os.environ.get("WORKSPACE_DIR", "./.workspace")
-INDEX_DIR = os.environ.get("INDEX_DIR", "./.chroma")
-
-_chroma_client: Any = None
-# Serialise *all* Chroma access.  chromadb.PersistentClient uses SQLite
-# under the hood; concurrent writes (or a write + init) from different
-# threads deadlock without an explicit lock at our layer.
-_chroma_lock = threading.Lock()
+from .vector_store import FAISSVectorStore
 
 
-def _get_chroma_client() -> Any:
-    """Return the shared Chroma client, creating it on first call (thread-safe)."""
-    global _chroma_client
-    if _chroma_client is None:  # fast path – no lock needed for reads after init
-        with _chroma_lock:
-            if _chroma_client is None:  # double-checked locking
-                os.makedirs(INDEX_DIR, exist_ok=True)
-                _chroma_client = chromadb.PersistentClient(path=INDEX_DIR)
-    return _chroma_client
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+
+BACKEND_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..")
+)
 
 
-def init_chroma() -> None:
-    """Eagerly initialise the Chroma client at server startup.
-
-    Calling this once from the FastAPI lifespan (or at module import time)
-    ensures that the first real request never pays the SQLite-open cost and,
-    more importantly, that the client is never created from two threads
-    simultaneously.
+def _resolve_project_path(
+    env_name: str,
+    default_rel_path: str,
+) -> str:
     """
-    _get_chroma_client()
+    Resolve a path relative to the backend directory.
 
+    Example:
+        FAISS_DIR=.faiss
+
+    becomes:
+        <backend>/.faiss
+    """
+
+    value = os.environ.get(env_name)
+
+    if value is None:
+        return os.path.abspath(
+            os.path.join(BACKEND_DIR, default_rel_path)
+        )
+
+    if os.path.isabs(value):
+        return value
+
+    return os.path.abspath(
+        os.path.join(BACKEND_DIR, value)
+    )
+
+
+WORKSPACE_DIR = _resolve_project_path(
+    "WORKSPACE_DIR",
+    ".workspace",
+)
+
+FAISS_DIR = _resolve_project_path(
+    "FAISS_DIR",
+    ".faiss",
+)
+
+
+# ---------------------------------------------------------------------------
+# FAISS vector store
+# ---------------------------------------------------------------------------
+
+def get_vector_store(repo_id: str) -> FAISSVectorStore:
+    """
+    Return the FAISS vector store for a repository.
+
+    Each repository gets its own FAISS collection/index.
+    """
+
+    return FAISSVectorStore(
+        index_dir=FAISS_DIR,
+        collection_name=f"repo_{repo_id}",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Repository ID
+# ---------------------------------------------------------------------------
 
 def repo_id_from_url(repo_url: str) -> str:
-    stripped = re.sub(r"^https?://", "", repo_url)
-    return re.sub(r"[^a-zA-Z0-9]", "-", stripped).lower()
+    """
+    Convert a repository URL into a filesystem/index-safe ID.
+
+    Example:
+
+        https://github.com/user/my-repo
+
+    becomes:
+
+        github-com-user-my-repo
+    """
+
+    stripped = re.sub(
+        r"^https?://",
+        "",
+        repo_url,
+    )
+
+    return re.sub(
+        r"[^a-zA-Z0-9]",
+        "-",
+        stripped,
+    ).lower()
 
 
-def get_or_create_collection(repo_id: str):
-    with _chroma_lock:
-        return _get_chroma_client().get_or_create_collection(name=f"repo_{repo_id}")
-
+# ---------------------------------------------------------------------------
+# Check whether repository is already indexed
+# ---------------------------------------------------------------------------
 
 def is_repo_indexed(repo_id: str) -> bool:
-    """Returns True if the Chroma collection for this repo already has embeddings."""
+    """
+    Check whether the repository already has vectors in FAISS.
+    """
     try:
-        with _chroma_lock:
-            client = _get_chroma_client()
-            collection = client.get_collection(name=f"repo_{repo_id}")
-            count = collection.count()
+        store = get_vector_store(repo_id)
+
+        count = store.count()
+
+        print(">>> FAISS vector count:", count)
+
         return count > 0
-    except Exception:
+
+    except Exception as exc:
+        print("!!! ERROR in is_repo_indexed !!!")
+        print("!!! TYPE:", type(exc).__name__)
+        print("!!! ERROR:", repr(exc))
+
+
         return False
 
 
+def get_repo_index_status(repo_id: str) -> dict:
+    """
+    Return indexing status and statistics for a repository.
+    """
+
+    local_path = os.path.join(
+        WORKSPACE_DIR,
+        repo_id,
+    )
+
+    indexed = is_repo_indexed(repo_id)
+
+    if not indexed:
+        return {
+            "indexed": False,
+            "fileCount": 0,
+            "chunkCount": 0,
+        }
+
+    # Get the existing FAISS vector store
+    store = get_vector_store(repo_id)
+
+    # Each vector represents one code chunk
+    chunk_count = store.count()
+
+    # Scan repository to count files
+    files = (
+        scan_repository(local_path)
+        if os.path.exists(local_path)
+        else []
+    )
+
+    return {
+        "indexed": True,
+        "fileCount": len(files),
+        "chunkCount": chunk_count,
+    }
+
+# ---------------------------------------------------------------------------
+# Index repository
+# ---------------------------------------------------------------------------
+
 def index_repository(repo_url: str) -> dict:
+    """
+    Clone a repository, scan files, chunk code, generate embeddings,
+    and store everything in FAISS.
+    """
+
     repo_id = repo_id_from_url(repo_url)
-    local_path = os.path.join(WORKSPACE_DIR, repo_id)
 
-    os.makedirs(WORKSPACE_DIR, exist_ok=True)
+    local_path = os.path.join(
+        WORKSPACE_DIR,
+        repo_id,
+    )
 
-    # ── Fast-path: already indexed ──────────────────────────────────────────
-    # If the Chroma collection exists and already has documents, skip the
-    # expensive clone + embed pipeline entirely and return immediately.
+    os.makedirs(
+        WORKSPACE_DIR,
+        exist_ok=True,
+    )
+
+    # -----------------------------------------------------------------------
+    # Fast path: repository already indexed
+    # -----------------------------------------------------------------------
+
     if is_repo_indexed(repo_id):
-        collection = get_or_create_collection(repo_id)
-        chunk_count = collection.count()
-        files = scan_repository(local_path) if os.path.exists(local_path) else []
-        print(f"[indexer] '{repo_id}' already indexed ({chunk_count} chunks). Skipping.")
-        return {"repoId": repo_id, "fileCount": len(files), "chunkCount": chunk_count, "alreadyIndexed": True}
-    # ────────────────────────────────────────────────────────────────────────
+
+        store = get_vector_store(repo_id)
+
+        chunk_count = store.count()
+
+        files = (
+            scan_repository(local_path)
+            if os.path.exists(local_path)
+            else []
+        )
+
+        return {
+            "repoId": repo_id,
+            "fileCount": len(files),
+            "chunkCount": chunk_count,
+            "alreadyIndexed": True,
+        }
+
+    # -----------------------------------------------------------------------
+    # Clone repository
+    # -----------------------------------------------------------------------
 
     if not os.path.exists(local_path):
+
+        print(">>> Repository doesn't exist locally")
+        print(">>> Starting git clone...")
+
         subprocess.run(
-            ["git", "clone", "--depth", "1", repo_url, local_path],## Why --depth 1? It performs a shallow clone.You don't need the entire Git history for RAG.You only need the current source code.
+            [
+                "git",
+                "clone",
+                "--depth",
+                "1",
+                repo_url,
+                local_path,
+            ],
             check=True,
         )
 
+        print(">>> Git clone completed")
+
+    else:
+        print(">>> Repository already exists locally")
+        print(">>> Skipping git clone")
+
+    print(">>> local_path:", local_path)
+
+    # -----------------------------------------------------------------------
+    # Scan repository
+    # -----------------------------------------------------------------------
+
+    print(">>> Starting scan_repository()...")
+
     files = scan_repository(local_path)
+
+    print(">>> scan_repository() completed")
+    print(">>> Number of files:", len(files))
+
+    # -----------------------------------------------------------------------
+    # Chunk repository
+    # -----------------------------------------------------------------------
+
+    print(">>> Starting chunk_repository()...")
+
     chunks: list[CodeChunk] = chunk_repository(files)
-    collection = get_or_create_collection(repo_id)
 
-    # Batch embed + upsert. Voyage AI accepts a batch per request; keep
-    # batches modest to stay well under any request-size limits.
+    print(">>> chunk_repository() completed")
+    print(">>> Number of chunks:", len(chunks))
+
+    if not chunks:
+        print("!!! No code chunks found")
+
+        return {
+            "repoId": repo_id,
+            "fileCount": len(files),
+            "chunkCount": 0,
+            "alreadyIndexed": False,
+        }
+
+    # -----------------------------------------------------------------------
+    # Get FAISS store
+    # -----------------------------------------------------------------------
+
+    print(">>> Getting FAISS vector store...")
+
+    store = get_vector_store(repo_id)
+
+    print(">>> FAISS vector store obtained")
+    print(">>> Store:", store)
+
+    # -----------------------------------------------------------------------
+    # Batch embedding + FAISS insertion
+    # -----------------------------------------------------------------------
+
     BATCH_SIZE = 128
-    for i in range(0, len(chunks), BATCH_SIZE):
-        if i > 0:
-            time.sleep(0.5)
-        batch = chunks[i : i + BATCH_SIZE]
-        embeddings = embed_texts([c.content for c in batch])
 
-        collection.upsert(
-            ids=[c.id for c in batch],
-            embeddings=embeddings,
-            documents=[c.content for c in batch],
-            metadatas=[
-                {
-                    "filePath": c.file_path,
-                    "startLine": c.start_line,
-                    "endLine": c.end_line,
-                    "symbolName": c.symbol_name or "",
-                    "symbolType": c.symbol_type,
-                    "language": c.language,
-                }
-                for c in batch
-            ],
+    for i in range(
+        0,
+        len(chunks),
+        BATCH_SIZE,
+    ):
+
+        print(
+            f">>> Starting batch: "
+            f"{i} to {min(i + BATCH_SIZE, len(chunks))}"
         )
 
-    return {"repoId": repo_id, "fileCount": len(files), "chunkCount": len(chunks)}
+        if i > 0:
+            print(">>> Sleeping 0.5 seconds...")
+            time.sleep(0.5)
+
+        batch = chunks[
+            i : i + BATCH_SIZE
+        ]
+
+        print(">>> Batch size:", len(batch))
+
+        # ---------------------------------------------------------------
+        # Generate embeddings
+        # ---------------------------------------------------------------
+
+        print(">>> Calling embed_texts()...")
+
+        embeddings = embed_texts(
+            [
+                chunk.content
+                for chunk in batch
+            ]
+        )
+
+        print(">>> embed_texts() completed")
+        print(
+            ">>> Number of embeddings:",
+            len(embeddings),
+        )
+
+        # ---------------------------------------------------------------
+        # Build metadata
+        # ---------------------------------------------------------------
+
+        metadata = [
+            {
+                "id": chunk.id,
+                "filePath": chunk.file_path,
+                "startLine": chunk.start_line,
+                "endLine": chunk.end_line,
+                "symbolName": (
+                    chunk.symbol_name
+                    or ""
+                ),
+                "symbolType": chunk.symbol_type,
+                "language": chunk.language,
+                "content": chunk.content,
+            }
+            for chunk in batch
+        ]
+
+        # ---------------------------------------------------------------
+        # Add vectors + metadata to FAISS
+        # ---------------------------------------------------------------
+
+        print(">>> Calling FAISS add()...")
+
+        store.add(
+            embeddings=embeddings,
+            metadata=metadata,
+        )
+
+        print(">>> FAISS add() completed")
+
+    # -----------------------------------------------------------------------
+    # Final result
+    # -----------------------------------------------------------------------
+
+    final_count = store.count()
+
+    print("========================================")
+    print(">>> Repository indexing completed")
+    print(">>> repo_id:", repo_id)
+    print(">>> files:", len(files))
+    print(">>> chunks:", len(chunks))
+    print(">>> FAISS vectors:", final_count)
+    print("========================================")
+
+    return {
+        "repoId": repo_id,
+        "fileCount": len(files),
+        "chunkCount": len(chunks),
+        "alreadyIndexed": False,
+    }
