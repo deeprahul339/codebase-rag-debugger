@@ -25,12 +25,14 @@ export default function UploadRepo({ onIndexed }: UploadRepoProps) {
     try {
       // ── Step 1: Fast check (~50 ms) ──────────────────────────────────────
       setStatusMsg("Checking if already indexed…");
-      const { repoId, indexed } = await checkRepoStatus(repoUrl.trim());
+      const { repoId, indexed, fileCount, chunkCount } = await checkRepoStatus(
+        repoUrl.trim(),
+      );
 
       if (indexed) {
         // Already in Chroma — load immediately without re-embedding.
         setStatusMsg("Already indexed! Loading…");
-        onIndexed({ repoId, fileCount: 0, chunkCount: 0 });
+        onIndexed({ repoId, fileCount: fileCount, chunkCount: chunkCount });
         return;
       }
 

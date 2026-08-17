@@ -33,14 +33,17 @@ build/
 *.log
 logs/
 
+
+
 # ============================================================
-# ChromaDB / Vector Database
+# Faiss / Vector Database
 # ============================================================
-chroma/
-chroma_db/
-.chroma/
+faiss/
+faiss_db/
+.faiss/
 *.sqlite
 *.sqlite3
+
 
 # ============================================================
 # Codebase RAG - Local Workspace / Cloned Repositories
