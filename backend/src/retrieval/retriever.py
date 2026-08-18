@@ -11,15 +11,8 @@ def retrieve_relevant_chunks(
     Retrieve the most relevant code chunks from the repository's
     FAISS vector index.
     """
-
-    print(">>> retrieve_relevant_chunks() called")
-    print(">>> repo_id:", repo_id)
-    print(">>> query:", query)
-
     # Get the FAISS vector store for this repository.
     store = get_vector_store(repo_id)
-
-    print(">>> FAISS vector count:", store.count())
 
     # No vectors available.
     if store.count() == 0:
@@ -31,17 +24,13 @@ def retrieve_relevant_chunks(
 
     [query_embedding] = embed_texts([query])
 
-    print(">>> Query embedding generated")
-
-    # Search the FAISS index.
-    print(">>> Searching FAISS...")
-
+    # Search the FAISS index. 
     results = store.search(
         embedding=query_embedding,
         k=top_k,
     )
 
-    print(">>> FAISS results:", len(results))
+    print(">>> FAISS results:",results)
 
     chunks: list[RetrievedChunk] = []
 
@@ -92,9 +81,5 @@ def retrieve_relevant_chunks(
             )
         )
 
-    print(
-        ">>> Retrieved chunks:",
-        len(chunks),
-    )
 
     return chunks

@@ -49,6 +49,8 @@ faiss_db/
 # Codebase RAG - Local Workspace / Cloned Repositories
 # ============================================================
 workspace/
+# Local workspace / cloned repositories
+.workspace/
 workspaces/
 repos/
 repositories/

@@ -2,12 +2,13 @@ import os
 
 from dotenv import load_dotenv
 
+
 load_dotenv()
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
-from src.routes import repository, chat
+from src.routes import repository, chat,search
 
 
 app = FastAPI(title="Codebase RAG Debugger API")
@@ -21,7 +22,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 @app.get("/")
 async def root():
     return {"status": "ok"}
@@ -29,6 +29,7 @@ async def root():
 #Register your routers
 app.include_router(repository.router)
 app.include_router(chat.router)
+app.include_router(search.router)  
 
 
 if __name__ == "__main__":
