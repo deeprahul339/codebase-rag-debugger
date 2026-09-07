@@ -2,8 +2,9 @@
 
 import { useState } from "react";
 import { askQuestion } from "../lib/api";
-import type { ChatMessageData } from "../types";
+import type { AgentEvent, ChatMessageData } from "../types";
 import ChatMessage from "./ChatMessage";
+import AgentActivity from "./AgentActivity";
 
 interface ChatProps {
   repoId: string;
@@ -13,10 +14,13 @@ export default function Chat({ repoId }: ChatProps) {
   const [messages, setMessages] = useState<ChatMessageData[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [agentEvents, setAgentEvents] = useState<AgentEvent[]>([]);
 
   async function handleSend(e: React.FormEvent) {
     e.preventDefault();
+
     const question = input.trim();
+
     if (!question || isLoading) return;
 
     const userMessage: ChatMessageData = {
@@ -25,23 +29,38 @@ export default function Chat({ repoId }: ChatProps) {
       content: question,
       createdAt: Date.now(),
     };
+
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
+
     setIsLoading(true);
+    setAgentEvents([]);
 
     try {
-      const { answer, sources } = await askQuestion(repoId, question);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: answer,
-          sources,
-          createdAt: Date.now(),
-        },
-      ]);
+      let finalAnswer = "";
+
+      await askQuestion(repoId, question, (event) => {
+        setAgentEvents((prev) => [...prev, event]);
+
+        if (event.type === "FINAL") {
+          finalAnswer = event.answer;
+        }
+      });
+
+      if (finalAnswer) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: finalAnswer,
+            createdAt: Date.now(),
+          },
+        ]);
+      }
     } catch (err) {
+      console.error(err);
+
       setMessages((prev) => [
         ...prev,
         {
@@ -62,6 +81,9 @@ export default function Chat({ repoId }: ChatProps) {
         {messages.map((m) => (
           <ChatMessage key={m.id} {...m} />
         ))}
+
+        {isLoading && <AgentActivity events={agentEvents} />}
+
         {isLoading && <p className="text-sm text-gray-400">Thinking...</p>}
       </div>
 
@@ -73,6 +95,7 @@ export default function Chat({ repoId }: ChatProps) {
           className="flex-1 rounded-md border px-3 py-2 text-sm"
           disabled={isLoading}
         />
+
         <button
           type="submit"
           disabled={isLoading || !input.trim()}

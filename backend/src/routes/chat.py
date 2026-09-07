@@ -1,8 +1,10 @@
+import json
+
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from ..retrieval.retriever import retrieve_relevant_chunks
-from ..llm.model import answer_with_context
+from ..agent.agent import run_agent
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -15,10 +17,8 @@ class ChatRequest(BaseModel):
 @router.post("")
 def chat(body: ChatRequest):
     """
-    Core RAG loop:
-    1. Retrieve relevant code chunks from the FAISS index.
-    2. Send the retrieved chunks to the LLM.
-    3. Return the generated answer and source information.
+    Run the AI debugging agent and stream its events
+    back to the frontend.
     """
 
     if not body.repoId or not body.question:
@@ -27,36 +27,25 @@ def chat(body: ChatRequest):
             detail="repoId and question are required",
         )
 
-    try:
-        # Retrieve relevant chunks from the FAISS index
-        chunks = retrieve_relevant_chunks(
-            body.repoId,
-            body.question,
-        )
+    def generate():
+        try:
+            for event in run_agent(
+                body.repoId,
+                body.question,
+            ):
+                yield f"data: {json.dumps(event)}\n\n"
 
-        # Generate an answer using the retrieved code as context
-        answer = answer_with_context(
-            body.question,
-            chunks,
-        )
+        except Exception as exc:
+            print(f"Agent query failed: {exc}")
 
-        return {
-            "answer": answer,
-            "sources": [
-                {
-                    "filePath": chunk.file_path,
-                    "startLine": chunk.start_line,
-                    "endLine": chunk.end_line,
-                    "symbolName": chunk.symbol_name,
-                }
-                for chunk in chunks
-            ],
-        }
+            error_event = {
+                "type": "ERROR",
+                "message": "Failed to process question",
+            }
 
-    except Exception as exc:
-        print(f"Chat query failed: {exc}")
+            yield f"data: {json.dumps(error_event)}\n\n"
 
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to answer question",
-        ) from exc
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+    )

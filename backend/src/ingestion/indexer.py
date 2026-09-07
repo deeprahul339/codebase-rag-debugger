@@ -125,8 +125,6 @@ def is_repo_indexed(repo_id: str) -> bool:
 
         count = store.count()
 
-        print(">>> FAISS vector count:", count)
-
         return count > 0
 
     except Exception as exc:
@@ -243,24 +241,19 @@ def index_repository(repo_url: str) -> dict:
         )
 
         print(">>> Git clone completed")
-
-    else:
-        print(">>> Repository already exists locally")
-        print(">>> Skipping git clone")
-
-    print(">>> local_path:", local_path)
-
+        
     # -----------------------------------------------------------------------
     # Scan repository
     # -----------------------------------------------------------------------
-
-    print(">>> Starting scan_repository()...")
-
     files = scan_repository(local_path)
+    total_size = sum(
+    file.size_bytes
+    for file in files
+)
 
-    print(">>> scan_repository() completed")
-    print(">>> Number of files:", len(files))
-
+    print(    f">>> Total source size: "
+    f"{total_size / 1024:.2f} KB"
+)
     # -----------------------------------------------------------------------
     # Chunk repository
     # -----------------------------------------------------------------------
@@ -268,10 +261,7 @@ def index_repository(repo_url: str) -> dict:
     print(">>> Starting chunk_repository()...")
 
     chunks: list[CodeChunk] = chunk_repository(files)
-
-    print(">>> chunk_repository() completed")
-    print(">>> Number of chunks:", len(chunks))
-
+    
     if not chunks:
         print("!!! No code chunks found")
 
@@ -290,14 +280,11 @@ def index_repository(repo_url: str) -> dict:
 
     store = get_vector_store(repo_id)
 
-    print(">>> FAISS vector store obtained")
-    print(">>> Store:", store)
-
     # -----------------------------------------------------------------------
     # Batch embedding + FAISS insertion
     # -----------------------------------------------------------------------
 
-    BATCH_SIZE = 128
+    BATCH_SIZE = 20
 
     for i in range(
         0,
@@ -305,39 +292,32 @@ def index_repository(repo_url: str) -> dict:
         BATCH_SIZE,
     ):
 
-        print(
-            f">>> Starting batch: "
-            f"{i} to {min(i + BATCH_SIZE, len(chunks))}"
-        )
 
         if i > 0:
-            print(">>> Sleeping 0.5 seconds...")
-            time.sleep(0.5)
+            print(">>> Sleeping 22 seconds...")
+            time.sleep(22)
 
         batch = chunks[
             i : i + BATCH_SIZE
         ]
-
-        print(">>> Batch size:", len(batch))
+        print(
+        f">>> Embedding "
+        f"{len(batch)} chunks..."
+    )
 
         # ---------------------------------------------------------------
         # Generate embeddings
         # ---------------------------------------------------------------
 
-        print(">>> Calling embed_texts()...")
 
         embeddings = embed_texts(
             [
                 chunk.content
                 for chunk in batch
-            ]
+            ],
+            input_type="document",
         )
 
-        print(">>> embed_texts() completed")
-        print(
-            ">>> Number of embeddings:",
-            len(embeddings),
-        )
 
         # ---------------------------------------------------------------
         # Build metadata
@@ -364,14 +344,14 @@ def index_repository(repo_url: str) -> dict:
         # Add vectors + metadata to FAISS
         # ---------------------------------------------------------------
 
-        print(">>> Calling FAISS add()...")
+        
 
         store.add(
             embeddings=embeddings,
             metadata=metadata,
         )
 
-        print(">>> FAISS add() completed")
+        
 
     # -----------------------------------------------------------------------
     # Final result
@@ -379,13 +359,6 @@ def index_repository(repo_url: str) -> dict:
 
     final_count = store.count()
 
-    print("========================================")
-    print(">>> Repository indexing completed")
-    print(">>> repo_id:", repo_id)
-    print(">>> files:", len(files))
-    print(">>> chunks:", len(chunks))
-    print(">>> FAISS vectors:", final_count)
-    print("========================================")
 
     return {
         "repoId": repo_id,

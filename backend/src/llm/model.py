@@ -87,6 +87,7 @@ class RetrievedChunk:
 
 def embed_texts(
     texts: list[str],
+       input_type: str,
 ) -> list[list[float]]:
     """Embed a batch of texts via Voyage AI's code-tuned model."""
 
@@ -102,7 +103,11 @@ def embed_texts(
     delay = 3.0
 
     for attempt in range(max_retries):
-
+        print(
+    f">>> Voyage request: "
+    f"{len(texts)} texts, "
+    f"attempt={attempt + 1}"
+)
         response = httpx.post(
             "https://api.voyageai.com/v1/embeddings",
             headers={
@@ -111,6 +116,7 @@ def embed_texts(
             },
             json={
                 "input": texts,
+                    "input_type": input_type,
                 "model": "voyage-code-3",
             },
             timeout=60.0,
@@ -137,6 +143,11 @@ def embed_texts(
                 f"Retrying in {wait_time}s "
                 f"(attempt {attempt + 1}/{max_retries})"
             )
+            print(">>> Voyage 429 response:")
+            print(response.text)
+
+            print(">>> Response headers:")
+            print(dict(response.headers))
 
             time.sleep(wait_time)
 
@@ -159,38 +170,3 @@ def embed_texts(
     )
 
 
-# ------------------------------------------------------------------
-# Gemini Answer Generation
-# ------------------------------------------------------------------
-
-def answer_with_context(
-    question: str,
-    chunks: list[RetrievedChunk],
-) -> str:
-
-    client = _get_gemini_client()
-
-    context = "\n\n".join(
-        f"--- {c.file_path}:{c.start_line}-{c.end_line}"
-        f"{f' ({c.symbol_name})' if c.symbol_name else ''} ---\n"
-        f"{c.content}"
-        for c in chunks
-    )
-
-    prompt = f"""
-{SYSTEM_PROMPT}
-
-Question:
-{question}
-
-Retrieved code context:
-
-{context}
-"""
-
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=prompt,
-    )
-
-    return response.text or ""

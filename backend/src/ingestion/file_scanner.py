@@ -13,7 +13,7 @@ ALLOWED_EXTENSIONS = {
     ".rb", ".php", ".c", ".cpp", ".h",
 }
 
-IGNORED_DIRS = {
+IGNORED_DIRS   = {
     "node_modules", ".git", "dist", "build", "out",
     "venv", ".venv", "__pycache__", ".next", "coverage",
 }
