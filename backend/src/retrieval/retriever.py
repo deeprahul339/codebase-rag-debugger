@@ -22,7 +22,7 @@ def retrieve_relevant_chunks(
     # Convert the user's question into an embedding.
     print(">>> Embedding query...")
 
-    [query_embedding] = embed_texts([query])
+    [query_embedding] = embed_texts([query], input_type="query")
 
     # Search the FAISS index. 
     results = store.search(
@@ -30,20 +30,11 @@ def retrieve_relevant_chunks(
         k=top_k,
     )
 
-    print(">>> FAISS results:",results)
-
     chunks: list[RetrievedChunk] = []
 
     for result in results:
         metadata = result["metadata"]
 
-        print(
-            ">>> Retrieved:",
-            metadata.get("filePath"),
-            metadata.get("startLine"),
-            metadata.get("endLine"),
-            metadata.get("symbolName"),
-        )
 
         chunks.append(
             RetrievedChunk(

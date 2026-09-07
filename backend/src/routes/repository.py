@@ -25,14 +25,12 @@ async def check_repo(body: IndexRepoRequest):
         raise HTTPException(status_code=400, detail="repoUrl is required")
 
     repo_id = repo_id_from_url(body.repoUrl)
-
     loop = asyncio.get_running_loop()
     status = await loop.run_in_executor(
         _index_executor,
         get_repo_index_status,
         repo_id,
     )
-
     return {
         "repoId": repo_id,
         **status

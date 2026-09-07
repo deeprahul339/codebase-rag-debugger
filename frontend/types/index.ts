@@ -23,3 +23,23 @@ export interface ChatMessageData {
   sources?: Source[];
   createdAt: number;
 }
+
+export type AgentEvent =
+  | {
+      type: "TOOL_START";
+      tool: string;
+      arguments: Record<string, unknown>;
+    }
+  | {
+      type: "TOOL_RESULT";
+      tool: string;
+      message: string;
+    }
+  | {
+      type: "FINAL";
+      answer: string;
+    }
+  | {
+      type: "ERROR";
+      message: string;
+    };

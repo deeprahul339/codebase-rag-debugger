@@ -34,7 +34,7 @@ app.include_router(search.router)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 4001))
-
+    print(f"Starting server on port {port}...")
     uvicorn.run(
         "server:app",
        host="127.0.0.1",
